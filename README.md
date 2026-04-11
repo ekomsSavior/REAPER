@@ -52,7 +52,7 @@ Run REAPER with the desired flags:
 ./reaper -workers=20 -verbose -continuous -sleep-minutes=5 -since-days=0
 ```
 
-![image0(2)](https://github.com/user-attachments/assets/5670dc18-d4dc-4ee1-9aba-dec20f1b315a)
+![IMG_3654(1)](https://github.com/user-attachments/assets/605713c3-ac91-46d9-9b73-9cc88e5397db)
 
 
 ### Command‑line flags
