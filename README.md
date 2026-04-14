@@ -373,3 +373,6 @@ By default, `-hide-obfuscated=true`. If you still see obfuscated emails, add mor
 
 REAPER is intended for **educational purposes and authorised security assessments** only. 
 
+<img width="258" height="195" alt="reaper" src="https://github.com/user-attachments/assets/50554e14-efe2-4b63-8171-549cea81f098" />
+
+
