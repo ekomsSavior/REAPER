@@ -1,6 +1,6 @@
 # REAPER – GitHub Secret Harvester
 
-REAPER is a continuous, high‑performance scanner written in Go that hunts for exposed secrets across all public GitHub repositories. It scans code files, pull requests, issues, and commit messages for API keys, passwords, tokens, emails, database connection strings, security advisories, and other sensitive data.
+REAPER is a continuous, high‑performance scanner written in Go that hunts for exposed secrets across all public GitHub repositories. It scans code files, pull requests, issues, and commit messages for API keys, passwords, tokens, emails, database connection strings, security advisories (github related CVE), and other sensitive data.
 
 ## Features
 
