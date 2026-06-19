@@ -46,7 +46,7 @@ func (values *stringListFlag) Set(value string) error {
 // Configuration flags
 var (
 	githubToken    = flag.String("token", "", "GitHub Personal Access Token (or set GITHUB_TOKEN env)")
-	outputDir      = flag.String("output", "./output", "Output directory for findings")
+	outputDir      = flag.String("output", "./output", "Base output directory; omitted creates a per-run subdirectory")
 	workers        = flag.Int("workers", 20, "Number of concurrent workers")
 	minStars       = flag.Int("min-stars", 0, "Minimum stars filter")
 	sinceDays      = flag.Int("since-days", 7, "Only scan repos updated in last X days")
@@ -169,9 +169,11 @@ func main() {
 		log.Fatal("-api-rps and -api-burst must be greater than zero")
 	}
 
-	if err := os.MkdirAll(*outputDir, 0755); err != nil {
+	resolvedOutput, err := prepareOutputDirectory(*outputDir, flagWasSet("output"), time.Now())
+	if err != nil {
 		log.Fatalf("Failed to create output directory: %v", err)
 	}
+	*outputDir = resolvedOutput
 
 	patterns := GetAllPatterns()
 	if *rulesOnly {
@@ -295,6 +297,42 @@ func configureSearchKeywords() error {
 
 	searchKeywords = uniqueKeywords(searchKeywords)
 	return nil
+}
+
+func flagWasSet(name string) bool {
+	found := false
+	flag.Visit(func(current *flag.Flag) {
+		if current.Name == name {
+			found = true
+		}
+	})
+	return found
+}
+
+func prepareOutputDirectory(base string, useExactDirectory bool, now time.Time) (string, error) {
+	if useExactDirectory {
+		if err := os.MkdirAll(base, 0o755); err != nil {
+			return "", err
+		}
+		return base, nil
+	}
+
+	if err := os.MkdirAll(base, 0o755); err != nil {
+		return "", err
+	}
+
+	runName := "run_" + now.Format("20060102_150405")
+	for sequence := 0; ; sequence++ {
+		candidate := filepath.Join(base, runName)
+		if sequence > 0 {
+			candidate = filepath.Join(base, fmt.Sprintf("%s_%02d", runName, sequence))
+		}
+		if err := os.Mkdir(candidate, 0o755); err == nil {
+			return candidate, nil
+		} else if !os.IsExist(err) {
+			return "", err
+		}
+	}
 }
 
 func readKeywordFile(path string) ([]string, error) {

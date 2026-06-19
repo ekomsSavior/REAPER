@@ -16,6 +16,7 @@ REAPER is a continuous, high‑performance scanner written in Go that hunts for 
 - **Raw Git blob scanning** – Scans actual default-branch file content using recursive trees and raw blobs.
 - **Custom detector packs** – Add software- or industry-specific JSON rule packs without recompiling.
 - **Real‑time output** – Findings saved to both CSV and JSONL with masked values and redacted context.
+- **Per-run output isolation** – Default runs receive timestamped folders so findings never accumulate into one giant file.
 - **Single or batch mode** – Scan one repository, a list from a file, or continuously scan everything.
 - **Keyword-focused discovery** – Narrow repository discovery with keywords, a wordlist, or an optional interactive prompt.
 - **Graceful shutdown** – Saves state on Ctrl+C.
@@ -62,7 +63,7 @@ export GITHUB_TOKEN=ghp_your_token_here
 | `-hide-obfuscated` | true | Hide obfuscated emails (e.g., user[at]example[dot]com) |
 | `-entropy` | true | Enable entropy checking (reduces false positives for API keys) |
 | `-min-stars` | 0 | Minimum number of stars a repository must have |
-| `-output` | ./output | Directory where output files are saved |
+| `-output` | ./output | Base directory; when omitted, REAPER creates a timestamped run folder |
 | `-repo` | "" | Single repository URL to scan (can be used multiple times) |
 | `-repo-list` | "" | File containing repository URLs (one per line) |
 | `-keyword` | "" | Repository search keyword; repeat it or use comma-separated values |
@@ -173,7 +174,18 @@ The first non-empty capture group is treated as the secret. Optional rule keywor
 
 ## Output Files
 
-All findings are saved inside the `output/` directory (or a custom path set by `-output`).
+When `-output` is omitted, each invocation receives an isolated timestamped directory:
+
+```text
+output/
+└── run_20260619_123456/
+    ├── advisories.jsonl
+    ├── reaper_findings.jsonl
+    ├── reaper_findings_20260619_123456.csv
+    └── scanned_repos.txt
+```
+
+If two runs begin during the same second, REAPER safely adds `_01`, `_02`, and so on. Passing `-output ./custom-path` uses that exact directory and preserves the previous append/persistence behavior.
 
 - **`reaper_findings_TIMESTAMP.csv`** – CSV file with masked secret values (safe to share).
 - **`reaper_findings.jsonl`** – Newline‑delimited JSON with masked secret values and redacted context.
@@ -220,120 +232,127 @@ Press `Ctrl+C` at any time to stop gracefully; the list of scanned repositories 
 
 ## Detailed jq Walkthrough: Analyzing REAPER Findings
 
-The `reaper_findings.jsonl` file contains masked secrets in JSON format, one object per line. Here is how to use `jq` to analyse the data.
+The `reaper_findings.jsonl` file contains masked secrets in JSON format, one object per line. Set `RUN_DIR` to the run you want to inspect; this example selects the newest default run:
+
+```bash
+RUN_DIR=$(find ./output -maxdepth 1 -type d -name 'run_*' | sort | tail -1)
+echo "$RUN_DIR"
+```
+
+Here is how to use `jq` to analyse that run.
 
 ### Basic viewing using jq
 
 ```bash
 # View all findings (formatted)
-jq '.' output/reaper_findings.jsonl
+jq '.' "$RUN_DIR/reaper_findings.jsonl"
 
 # View raw lines (useful for counting)
-cat output/reaper_findings.jsonl | jq -c '.'
+cat "$RUN_DIR/reaper_findings.jsonl" | jq -c '.'
 ```
 
 ### Filtering by secret type
 
 ```bash
 # AWS keys only
-jq 'select(.SecretType == "AWS Access Key" or .SecretType == "AWS Secret Key")' output/reaper_findings.jsonl
+jq 'select(.SecretType == "AWS Access Key" or .SecretType == "AWS Secret Key")' "$RUN_DIR/reaper_findings.jsonl"
 
 # Email addresses only
-jq 'select(.SecretType == "Email Address")' output/reaper_findings.jsonl
+jq 'select(.SecretType == "Email Address")' "$RUN_DIR/reaper_findings.jsonl"
 
 # GitHub tokens only
-jq 'select(.SecretType == "GitHub Token")' output/reaper_findings.jsonl
+jq 'select(.SecretType == "GitHub Token")' "$RUN_DIR/reaper_findings.jsonl"
 
 # JWT tokens only
-jq 'select(.SecretType == "JWT Token")' output/reaper_findings.jsonl
+jq 'select(.SecretType == "JWT Token")' "$RUN_DIR/reaper_findings.jsonl"
 ```
 
 ### Filtering by severity
 
 ```bash
 # Critical severity only
-jq 'select(.Severity == "CRITICAL")' output/reaper_findings.jsonl
+jq 'select(.Severity == "CRITICAL")' "$RUN_DIR/reaper_findings.jsonl"
 
 # High severity only
-jq 'select(.Severity == "HIGH")' output/reaper_findings.jsonl
+jq 'select(.Severity == "HIGH")' "$RUN_DIR/reaper_findings.jsonl"
 
 # Critical or High
-jq 'select(.Severity == "CRITICAL" or .Severity == "HIGH")' output/reaper_findings.jsonl
+jq 'select(.Severity == "CRITICAL" or .Severity == "HIGH")' "$RUN_DIR/reaper_findings.jsonl"
 ```
 
 ### Filtering by repository
 
 ```bash
 # Findings from a specific repository
-jq 'select(.Repository == "owner/repo-name")' output/reaper_findings.jsonl
+jq 'select(.Repository == "owner/repo-name")' "$RUN_DIR/reaper_findings.jsonl"
 
 # Findings from multiple repositories
-jq 'select(.Repository | test("owner1|owner2"))' output/reaper_findings.jsonl
+jq 'select(.Repository | test("owner1|owner2"))' "$RUN_DIR/reaper_findings.jsonl"
 ```
 
 ### Filtering by file location
 
 ```bash
 # Secrets found in actual code files (not issues/PRs/commits)
-jq 'select(.FilePath != "issue" and .FilePath != "pull_request" and .FilePath != "commit_message")' output/reaper_findings.jsonl
+jq 'select(.FilePath != "issue" and .FilePath != "pull_request" and .FilePath != "commit_message")' "$RUN_DIR/reaper_findings.jsonl"
 
 # Secrets found in environment files
-jq 'select(.FilePath | endswith(".env"))' output/reaper_findings.jsonl
+jq 'select(.FilePath | endswith(".env"))' "$RUN_DIR/reaper_findings.jsonl"
 
 # Secrets found in configuration files
-jq 'select(.FilePath | test("\\.(yaml|yml|json|toml|ini)$"))' output/reaper_findings.jsonl
+jq 'select(.FilePath | test("\\.(yaml|yml|json|toml|ini)$"))' "$RUN_DIR/reaper_findings.jsonl"
 ```
 
 ### Statistics and counting
 
 ```bash
 # Count findings by type
-jq -r '.SecretType' output/reaper_findings.jsonl | sort | uniq -c | sort -rn
+jq -r '.SecretType' "$RUN_DIR/reaper_findings.jsonl" | sort | uniq -c | sort -rn
 
 # Count findings by severity
-jq -r '.Severity' output/reaper_findings.jsonl | sort | uniq -c | sort -rn
+jq -r '.Severity' "$RUN_DIR/reaper_findings.jsonl" | sort | uniq -c | sort -rn
 
 # Count findings per repository
-jq -r '.Repository' output/reaper_findings.jsonl | sort | uniq -c | sort -rn | head -20
+jq -r '.Repository' "$RUN_DIR/reaper_findings.jsonl" | sort | uniq -c | sort -rn | head -20
 
 # Total number of findings
-jq -s 'length' output/reaper_findings.jsonl
+jq -s 'length' "$RUN_DIR/reaper_findings.jsonl"
 ```
 
 ### Extracting specific fields
 
 ```bash
 # Show only repository, file path, secret type, and secret value (tab-separated)
-jq -r '[.Repository, .FilePath, .SecretType, .SecretValue] | @tsv' output/reaper_findings.jsonl
+jq -r '[.Repository, .FilePath, .SecretType, .SecretValue] | @tsv' "$RUN_DIR/reaper_findings.jsonl"
 
 # Show only critical findings with repository and URL
-jq -r 'select(.Severity == "CRITICAL") | [.Repository, .SecretType, .URL] | @tsv' output/reaper_findings.jsonl
+jq -r 'select(.Severity == "CRITICAL") | [.Repository, .SecretType, .URL] | @tsv' "$RUN_DIR/reaper_findings.jsonl"
 
 # Export all masked findings to CSV
-jq -r '[.Timestamp, .Repository, .FilePath, .LineNumber, .SecretType, .SecretValue, .URL, .Severity] | @csv' output/reaper_findings.jsonl > all_secrets.csv
+jq -r '[.Timestamp, .Repository, .FilePath, .LineNumber, .SecretType, .SecretValue, .URL, .Severity] | @csv' "$RUN_DIR/reaper_findings.jsonl" > all_secrets.csv
 ```
 
 ### Finding unique values
 
 ```bash
 # List all unique email addresses found
-jq -r 'select(.SecretType == "Email Address") | .SecretValue' output/reaper_findings.jsonl | sort -u
+jq -r 'select(.SecretType == "Email Address") | .SecretValue' "$RUN_DIR/reaper_findings.jsonl" | sort -u
 
 # List all unique repositories that leaked secrets
-jq -r '.Repository' output/reaper_findings.jsonl | sort -u
+jq -r '.Repository' "$RUN_DIR/reaper_findings.jsonl" | sort -u
 
 # List all unique API keys (excluding emails)
-jq -r 'select(.SecretType != "Email Address") | .SecretValue' output/reaper_findings.jsonl | sort -u
+jq -r 'select(.SecretType != "Email Address") | .SecretValue' "$RUN_DIR/reaper_findings.jsonl" | sort -u
 ```
 
 ### Time-based analysis
 
 ```bash
 # Findings from the last hour (requires adjusting date format)
-jq 'select(.Timestamp > "2026-04-14T12:00:00Z")' output/reaper_findings.jsonl
+jq 'select(.Timestamp > "2026-04-14T12:00:00Z")' "$RUN_DIR/reaper_findings.jsonl"
 
 # Show findings with timestamps
-jq -r '[.Timestamp, .Repository, .SecretType] | @tsv' output/reaper_findings.jsonl
+jq -r '[.Timestamp, .Repository, .SecretType] | @tsv' "$RUN_DIR/reaper_findings.jsonl"
 ```
 
 ### Analysing advisories (if enabled)
@@ -359,23 +378,23 @@ jq 'select(.Repository == "owner/repo-name")' output/advisories.jsonl
 
 ```bash
 # Find secrets containing a specific keyword (e.g., "prod", "live")
-jq -r 'select(.SecretValue | test("live|prod", "i")) | [.Repository, .SecretType, .SecretValue] | @tsv' output/reaper_findings.jsonl
+jq -r 'select(.SecretValue | test("live|prod", "i")) | [.Repository, .SecretType, .SecretValue] | @tsv' "$RUN_DIR/reaper_findings.jsonl"
 
 # Find secrets that look like they might be valid (long entropy)
-jq 'select(.SecretType != "Email Address" and (.SecretValue | length > 20))' output/reaper_findings.jsonl
+jq 'select(.SecretType != "Email Address" and (.SecretValue | length > 20))' "$RUN_DIR/reaper_findings.jsonl"
 ```
 
 ### Real-time monitoring
 
 ```bash
 # Watch new findings as they arrive (like tail -f)
-tail -f output/reaper_findings.jsonl | jq '.'
+tail -f "$RUN_DIR/reaper_findings.jsonl" | jq '.'
 
 # Watch only critical findings in real time
-tail -f output/reaper_findings.jsonl | jq 'select(.Severity == "CRITICAL")'
+tail -f "$RUN_DIR/reaper_findings.jsonl" | jq 'select(.Severity == "CRITICAL")'
 
 # Watch only email findings (non-obfuscated)
-tail -f output/reaper_findings.jsonl | jq 'select(.SecretType == "Email Address")'
+tail -f "$RUN_DIR/reaper_findings.jsonl" | jq 'select(.SecretType == "Email Address")'
 ```
 
 ### Exporting for reports
@@ -390,14 +409,14 @@ jq -s '
   (group_by(.Severity) | map("  \(.[0].Severity): \(length)") | join("\n")) +
   "\n\nBy type:\n" +
   (group_by(.SecretType) | map("  \(.[0].SecretType): \(length)") | join("\n"))
-' output/reaper_findings.jsonl
+' "$RUN_DIR/reaper_findings.jsonl"
 
 # Generate HTML report (simple)
 jq -r '
   "<html><body><h1>REAPER Findings</h1><table border=1><tr><th>Timestamp</th><th>Repository</th><th>Type</th><th>Severity</th><th>File</th><th>URL</th></tr>" +
   (.[] | "<tr><td>\(.Timestamp)</td><td>\(.Repository)</td><td>\(.SecretType)</td><td>\(.Severity)</td><td>\(.FilePath)</td><td><a href=\"\(.URL)\">link</a></td></tr>") +
   "</table></body></html>"
-' output/reaper_findings.jsonl > report.html
+' "$RUN_DIR/reaper_findings.jsonl" > report.html
 ```
 
 ## Troubleshooting
