@@ -1,0 +1,11 @@
+{
+  "rules": [
+    {
+      "name": "Example Vendor Token",
+      "regex": "vendor_(?:live|prod)_[A-Za-z0-9]{24}",
+      "severity": "critical",
+      "entropy": true,
+      "keywords": ["vendor", "client_secret", "api_key"]
+    }
+  ]
+}

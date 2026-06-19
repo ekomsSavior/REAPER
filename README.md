@@ -1,4 +1,4 @@
-# REAPER – GitHub Secret Harvester
+# REAPER Core v2 – GitHub Secret Scanner
 
 REAPER is a continuous, high‑performance scanner written in Go that hunts for exposed secrets across all public GitHub repositories. It scans code files, pull requests, issues, and commit messages for API keys, passwords, tokens, emails, database connection strings, security advisories (github related CVE), and other sensitive data.
 
@@ -10,9 +10,14 @@ REAPER is a continuous, high‑performance scanner written in Go that hunts for 
 - **Comprehensive secret patterns** – AWS keys, GitHub tokens, Slack/Discord/Stripe keys, JWT, database URLs, private keys, emails, generic passwords and API keys (with entropy filtering).
 - **Smart email filtering** – Automatically hides obfuscated emails (`user[at]example[dot]com`) and GitHub no‑reply addresses. Deduplicates emails per repository.
 - **Rate‑limit aware** – Respects GitHub API limits; backs off when limits are hit.
+- **Shared throttling** – Paces API calls and pauses every worker until GitHub's primary or secondary reset window has passed.
 - **Stateful scanning** – Remembers already scanned repositories (`scanned_repos.txt`) to avoid re‑scanning.
-- **Real‑time output** – Findings saved to both CSV (masked) and JSONL (unmasked) files.
+- **Core v2 detector pipeline** – All sources share multi-line detection, masking, context, and deduplication.
+- **Raw Git blob scanning** – Scans actual default-branch file content using recursive trees and raw blobs.
+- **Custom detector packs** – Add software- or industry-specific JSON rule packs without recompiling.
+- **Real‑time output** – Findings saved to both CSV and JSONL with masked values and redacted context.
 - **Single or batch mode** – Scan one repository, a list from a file, or continuously scan everything.
+- **Keyword-focused discovery** – Narrow repository discovery with keywords, a wordlist, or an optional interactive prompt.
 - **Graceful shutdown** – Saves state on Ctrl+C.
 
 ## Prerequisites
@@ -30,7 +35,7 @@ Clone the repository and build the binary:
 git clone https://github.com/ekomsSavior/REAPER.git
 cd REAPER
 go mod tidy
-go build -o reaper reaper.go
+go build -o reaper .
 ```
 
 ## Usage
@@ -50,8 +55,8 @@ export GITHUB_TOKEN=ghp_your_token_here
 | `-continuous` | true | Run forever, sleeping between cycles |
 | `-sleep-minutes` | 60 | Minutes to sleep between continuous cycles |
 | `-since-days` | 7 | Only scan repos updated in the last N days (0 = all) |
-| `-scan-prs` | true | Scan pull request titles, bodies, and comments |
-| `-scan-issues` | true | Scan issue titles, bodies, and comments |
+| `-scan-prs` | true | Scan pull request titles and bodies |
+| `-scan-issues` | true | Scan issue titles and bodies |
 | `-scan-commits` | true | Scan commit messages |
 | `-scan-advisories` | false | Check each repository for GitHub Security Advisories |
 | `-hide-obfuscated` | true | Hide obfuscated emails (e.g., user[at]example[dot]com) |
@@ -60,6 +65,15 @@ export GITHUB_TOKEN=ghp_your_token_here
 | `-output` | ./output | Directory where output files are saved |
 | `-repo` | "" | Single repository URL to scan (can be used multiple times) |
 | `-repo-list` | "" | File containing repository URLs (one per line) |
+| `-keyword` | "" | Repository search keyword; repeat it or use comma-separated values |
+| `-wordlist` | "" | File containing repository search keywords, one per line |
+| `-prompt-keywords` | false | Prompt for comma-separated keywords or an `@wordlist` path |
+| `-rules` | "" | Load a custom JSON detector pack; repeat for multiple packs |
+| `-rules-only` | false | Disable built-in detectors and use only custom packs |
+| `-max-file-bytes` | 1048576 | Maximum Git blob size to scan |
+| `-api-rps` | 1 | Maximum average GitHub API requests per second |
+| `-api-burst` | 1 | Maximum burst of GitHub API requests |
+| `-rate-limit-buffer` | 5s | Extra delay after GitHub's reported reset time |
 
 ### Modes of operation
 
@@ -104,12 +118,65 @@ Then run:
 
 Only dots (.) are printed for progress; findings are still saved to files.
 
+#### 6. Focus discovery with arbitrary search terms
+
+Search terms narrow which repositories REAPER discovers; secret detection inside those repositories is unchanged. Terms can be anything the user chooses: a company, product, technology, event, organization, industry, project name, phrase, or other topic. REAPER has no fixed taxonomy or built-in topic restriction. Multiple terms use match-any behavior and repositories are deduplicated before scanning.
+
+```bash
+# One user-chosen topic or phrase
+./reaper -keyword "renewable energy" -continuous=false
+
+# Repeat the flag or provide comma-separated terms
+./reaper -keyword kubernetes -keyword olympics -continuous=false
+./reaper -keyword "kubernetes,olympics" -continuous=false
+
+# One keyword or phrase per line; blank lines and # comments are ignored
+./reaper -wordlist topics.txt -continuous=false
+
+# Interactive entry: comma-separated keywords, @topics.txt, or blank for broad discovery
+./reaper -prompt-keywords -continuous=false
+```
+
+Discovery terms and detector packs solve different halves of focused scanning:
+
+- `-keyword` and `-wordlist` accept any user-chosen terms and select related repositories.
+- `-rules` optionally defines additional credential formats to detect inside those repositories.
+
+See [`examples/scopes.example.txt`](examples/scopes.example.txt) for a mixed arbitrary-term wordlist.
+
+#### 7. Add software- or industry-specific detectors
+
+Start from [`examples/rules.example.json`](examples/rules.example.json):
+
+```json
+{
+  "rules": [
+    {
+      "name": "Example Vendor Token",
+      "regex": "vendor_(?:live|prod)_[A-Za-z0-9]{24}",
+      "severity": "critical",
+      "entropy": true,
+      "keywords": ["vendor", "client_secret", "api_key"]
+    }
+  ]
+}
+```
+
+Use a pack alongside built-in detectors, or by itself:
+
+```bash
+./reaper -wordlist search-terms.txt -rules custom-rules.json -continuous=false
+./reaper -keyword "your chosen topic" -rules custom-rules.json -rules-only -continuous=false
+```
+
+The first non-empty capture group is treated as the secret. Optional rule keywords are fast, case-insensitive content prefilters.
+
 ## Output Files
 
 All findings are saved inside the `output/` directory (or a custom path set by `-output`).
 
 - **`reaper_findings_TIMESTAMP.csv`** – CSV file with masked secret values (safe to share).
-- **`reaper_findings.jsonl`** – Newline‑delimited JSON file containing **unmasked** secrets. Handle this file with extreme care.
+- **`reaper_findings.jsonl`** – Newline‑delimited JSON with masked secret values and redacted context.
 - **`advisories.jsonl`** – Newline‑delimited JSON file containing security advisories (when `-scan-advisories=true`).
 - **`scanned_repos.txt`** – List of already scanned repositories (full names). Prevents re‑scanning across cycles.
 
@@ -138,11 +205,11 @@ REAPER intelligently filters email addresses to reduce noise:
 
 When `-continuous=true` (the default), REAPER performs the following loop:
 
-1. Searches GitHub for public repositories using the query `a is:public` (optionally filtered by `pushed:>date`).
+1. Searches GitHub for public repositories using the query `a is:public`, or one query per configured keyword (optionally filtered by `pushed:>date`).
 2. For each new repository (not in `scanned_repos.txt`), it scans:
    - All files in the default branch.
-   - All pull requests (titles, bodies, comments).
-   - All issues (titles, bodies, comments).
+   - Pull request titles and bodies.
+   - Issue titles and bodies.
    - All commit messages.
    - Security advisories (if enabled).
 3. Findings are written to CSV and JSONL in real time.
@@ -153,7 +220,7 @@ Press `Ctrl+C` at any time to stop gracefully; the list of scanned repositories 
 
 ## Detailed jq Walkthrough: Analyzing REAPER Findings
 
-The `reaper_findings.jsonl` file contains **unmasked secrets** in JSON format, one object per line. Here is how to use `jq` to analyse the data.
+The `reaper_findings.jsonl` file contains masked secrets in JSON format, one object per line. Here is how to use `jq` to analyse the data.
 
 ### Basic viewing using jq
 
@@ -242,7 +309,7 @@ jq -r '[.Repository, .FilePath, .SecretType, .SecretValue] | @tsv' output/reaper
 # Show only critical findings with repository and URL
 jq -r 'select(.Severity == "CRITICAL") | [.Repository, .SecretType, .URL] | @tsv' output/reaper_findings.jsonl
 
-# Export all findings to CSV (unmasked - be careful)
+# Export all masked findings to CSV
 jq -r '[.Timestamp, .Repository, .FilePath, .LineNumber, .SecretType, .SecretValue, .URL, .Severity] | @csv' output/reaper_findings.jsonl > all_secrets.csv
 ```
 
@@ -374,5 +441,3 @@ By default, `-hide-obfuscated=true`. If you still see obfuscated emails, add mor
 REAPER is intended for **educational purposes and authorised security assessments** only. 
 
 <img width="258" height="195" alt="reaper" src="https://github.com/user-attachments/assets/50554e14-efe2-4b63-8171-549cea81f098" />
-
-
