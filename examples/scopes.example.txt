@@ -1,0 +1,8 @@
+# Terms can be any company, product, technology, event, organization,
+# industry, project, phrase, or topic the user wants to explore.
+kubernetes
+renewable energy
+
+# More unrelated examples demonstrating that no taxonomy is enforced.
+olympics
+payment gateway
