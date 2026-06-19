@@ -432,7 +432,7 @@ By default, `-hide-obfuscated=true`. If you still see obfuscated emails, add mor
 4. Test with a single repository:
 
    ```bash
-   ./reaper -repo https://github.com/ekomsSavior/REAPER -verbose
+   ./reaper -repo https://github.com/user0101/REAPER -verbose
    ```
 
 
